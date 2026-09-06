@@ -172,6 +172,43 @@ function PreviewRow({
 type DraftItem = SessionItem & { uid: string }
 const newUid = () => crypto.randomUUID()
 
+/** Tout l'état éditable du formulaire — l'instantané du garde-fou du retour, et le brouillon
+ *  mis de côté quand on ouvre la fiche d'un exercice depuis la séance (bug du 05/09/2026 :
+ *  cette navigation démontait le formulaire et perdait tout ce qui était en cours). */
+interface Draft {
+  name: string
+  category: Category
+  planMode: PlanMode
+  days: number[]
+  everyDays: number
+  startDate: string
+  steps: string[][]
+  startStep: number
+  items: SessionItem[]
+  workSec: number
+  restSec: number
+  rounds: number
+  stretchRest: number
+  stretchRounds: number
+  muscuRounds: number
+  group: string
+  warmupFor: Category | ''
+}
+const draftKeyOf = (id: string | undefined) => `elan-session-draft-${id ?? 'new'}`
+/** Brouillon mis de côté pour cette fiche, consommé à la lecture (une seule restauration) ;
+ *  ignoré passé une heure, pour ne pas ressusciter un vieux brouillon abandonné. */
+function takeDraft(key: string): Draft | null {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    sessionStorage.removeItem(key)
+    const { at, draft } = JSON.parse(raw) as { at: number; draft: Draft }
+    return Date.now() - at < 3_600_000 ? draft : null
+  } catch {
+    return null
+  }
+}
+
 /** Enveloppe sortable d'une ligne d'exercice — la poignée reçoit attributes/listeners.
  * Pendant un drag, la vignette qui suit le doigt est le DragOverlay : l'original reste
  * dans la liste en fantôme (opacity) et matérialise l'emplacement d'atterrissage. */
@@ -260,32 +297,41 @@ export default function SessionForm() {
   // Identifiant de « cette séance » dans la rotation (placeholder tant qu'elle n'existe pas)
   const selfKey = existing?.id ?? '__self__'
 
-  const [name, setName] = useState(existing?.name ?? '')
-  const [category, setCategory] = useState<Category>(existing?.category ?? 'muscu')
+  // Brouillon mis de côté par « Fiche exercice » (voir `Draft`) : lu une seule fois, au montage
+  const draftKey = draftKeyOf(id)
+  const draftRef = useRef<Draft | null | undefined>(undefined)
+  if (draftRef.current === undefined) draftRef.current = takeDraft(draftKey)
+  const d = draftRef.current
+
+  const [name, setName] = useState(d?.name ?? existing?.name ?? '')
+  const [category, setCategory] = useState<Category>(d?.category ?? existing?.category ?? 'muscu')
   // Jours de la séance : jours fixes (`days`) OU, en alternance, jours de semaine du cycle
   // (`repeat.onDays`) — mêmes cases, même état, seule l'écriture change
   const [days, setDays] = useState<number[]>(
-    cycleOwner?.repeat?.onDays?.length ? cycleOwner.repeat.onDays : (existing?.days ?? []),
+    d ? d.days : cycleOwner?.repeat?.onDays?.length ? cycleOwner.repeat.onDays : (existing?.days ?? []),
   )
   // Jours choisis / tous les X jours / avant une autre (warmupFor) — un seul « quand »
   const [planMode, setPlanMode] = useState<PlanMode>(
-    cycleOwner
-      ? cycleOwner.repeat?.onDays?.length
-        ? 'weekly'
-        : 'every'
-      : existing?.warmupFor && !existing.days.length
-        ? 'warmup'
-        : 'weekly',
+    d
+      ? d.planMode
+      : cycleOwner
+        ? cycleOwner.repeat?.onDays?.length
+          ? 'weekly'
+          : 'every'
+        : existing?.warmupFor && !existing.days.length
+          ? 'warmup'
+          : 'weekly',
   )
-  const [everyDays, setEveryDays] = useState(cycleOwner?.repeat?.everyDays ?? 2)
-  const [startDate, setStartDate] = useState(cycleOwner?.repeat?.startDate ?? todayStr())
+  const [everyDays, setEveryDays] = useState(d?.everyDays ?? cycleOwner?.repeat?.everyDays ?? 2)
+  const [startDate, setStartDate] = useState(d?.startDate ?? cycleOwner?.repeat?.startDate ?? todayStr())
   // Alternance en cours d'édition : un tableau de « crans » (A, B, C…), chacun regroupant
   // les séances faites ensemble ce jour-là (selfKey = cette séance). [[selfKey]] = pas
   // d'alternance.
-  const [steps, setSteps] = useState<string[][]>(() => (ownerSteps.length ? ownerSteps : [[selfKey]]))
+  const [steps, setSteps] = useState<string[][]>(() => d?.steps ?? (ownerSteps.length ? ownerSteps : [[selfKey]]))
   // « Commencer par » : cran qui tombera à la prochaine occurrence — dérivé de l'ancre
   // stockée pour refléter la phase actuelle du cycle, dans les deux cadences.
   const [startStep, setStartStep] = useState(() => {
+    if (d) return d.startStep
     const r = cycleOwner?.repeat
     if (!r || ownerSteps.length < 2) return 0
     if (r.onDays?.length) return countWeekdays(r.startDate, nextOccurrenceStr(r.onDays), r.onDays) % ownerSteps.length
@@ -294,17 +340,17 @@ export default function SessionForm() {
   // `comment: ''` (un commentaire ajouté puis laissé vide — Firestore stocke les champs vidés
   // comme '') redevient « pas de commentaire » : le champ ne s'affiche que s'il y a du texte.
   const [items, setItems] = useState<DraftItem[]>(() =>
-    (existing?.items ?? []).map((it) => ({ ...it, comment: it.comment || undefined, uid: newUid() })),
+    (d?.items ?? existing?.items ?? []).map((it) => ({ ...it, comment: it.comment || undefined, uid: newUid() })),
   )
-  const [workSec, setWorkSec] = useState(existing?.workSec ?? 45)
-  const [restSec, setRestSec] = useState(existing?.restSec ?? 15)
-  const [rounds, setRounds] = useState(existing?.rounds ?? 2)
-  const [stretchRest, setStretchRest] = useState(existing?.category === 'etirements' ? (existing.restSec ?? 0) : 5)
-  const [stretchRounds, setStretchRounds] = useState(existing?.category === 'etirements' ? (existing.rounds ?? 1) : 1)
-  const [muscuRounds, setMuscuRounds] = useState(existing?.category === 'muscu' ? (existing.rounds ?? 1) : 1)
-  const [group, setGroup] = useState(existing?.group ?? '')
+  const [workSec, setWorkSec] = useState(d?.workSec ?? existing?.workSec ?? 45)
+  const [restSec, setRestSec] = useState(d?.restSec ?? existing?.restSec ?? 15)
+  const [rounds, setRounds] = useState(d?.rounds ?? existing?.rounds ?? 2)
+  const [stretchRest, setStretchRest] = useState(d?.stretchRest ?? (existing?.category === 'etirements' ? (existing.restSec ?? 0) : 5))
+  const [stretchRounds, setStretchRounds] = useState(d?.stretchRounds ?? (existing?.category === 'etirements' ? (existing.rounds ?? 1) : 1))
+  const [muscuRounds, setMuscuRounds] = useState(d?.muscuRounds ?? (existing?.category === 'muscu' ? (existing.rounds ?? 1) : 1))
+  const [group, setGroup] = useState(d?.group ?? existing?.group ?? '')
   // Échauffement automatique : s'inviter dans Aujourd'hui les jours de telle catégorie
-  const [warmupFor, setWarmupFor] = useState<Category | ''>(existing?.warmupFor ?? '')
+  const [warmupFor, setWarmupFor] = useState<Category | ''>(d?.warmupFor ?? existing?.warmupFor ?? '')
   // Sheet mobile du sélecteur d'exercices (sur desktop le volet est permanent)
   const [pickerOpen, setPickerOpen] = useState(false)
   // Section du planning + échauffement : options de niche, repliées derrière leur résumé
@@ -747,15 +793,27 @@ export default function SessionForm() {
 
   // Garde-fou du retour : « Retour » sur une fiche modifiée demandait zéro confirmation et
   // perdait tout en silence. On compare un instantané du formulaire à celui du montage.
-  const snapshot = JSON.stringify({
+  const draft: Draft = {
     name, category, planMode, days, everyDays, startDate, steps, startStep,
     items: items.map(({ uid: _uid, ...rest }) => rest),
     workSec, restSec, rounds, stretchRest, stretchRounds, muscuRounds, group, warmupFor,
-  })
+  }
+  const snapshot = JSON.stringify(draft)
   const initialRef = useRef<string | null>(null)
-  if (initialRef.current === null) initialRef.current = snapshot
+  // Formulaire restauré d'un brouillon : il diffère forcément de la séance enregistrée,
+  // le retour doit demander confirmation ('' n'égale aucun instantané)
+  if (initialRef.current === null) initialRef.current = d ? '' : snapshot
   const back = () => {
     if (snapshot === initialRef.current || window.confirm('Abandonner les modifications ?')) navigate(-1)
+  }
+  // « Fiche exercice » quitte la page : le brouillon est mis de côté et repris au retour
+  const openExerciseSheet = (exId: string) => {
+    try {
+      sessionStorage.setItem(draftKey, JSON.stringify({ at: Date.now(), draft }))
+    } catch {
+      /* stockage indisponible : on navigue quand même */
+    }
+    navigate(`/exercise/${exId}`)
   }
 
   const addFromList = () => {
@@ -1158,7 +1216,7 @@ export default function SessionForm() {
                                             type="button"
                                             aria-label="Fiche exercice"
                                             title="Fiche exercice"
-                                            onClick={() => navigate(`/exercise/${ex.id}`)}
+                                            onClick={() => openExerciseSheet(ex.id)}
                                             className={iconBtn}
                                           >
                                             <FileText className="h-[15px] w-[15px]" />
