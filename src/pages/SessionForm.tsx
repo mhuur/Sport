@@ -392,7 +392,6 @@ export default function SessionForm() {
     }))
   })()
 
-  const catExercises = exercises.filter((e) => e.category === category)
   const exOf = (exId: string) => exercises.find((e) => e.id === exId)
   const hasItems = category === 'muscu' || category === 'hiit' || category === 'etirements'
   // Blocs (muscu ET étirements) : découpage de la séance en groupes répétés indépendamment
@@ -415,43 +414,45 @@ export default function SessionForm() {
     }
   }
 
+  /**
+   * Réglages par défaut d'un exercice selon le DÉROULÉ de la séance (sa catégorie) :
+   * muscu = séries, étirements = posture tenue (sec) ou mouvement compté (reps) selon la
+   * mesure de l'exercice, HIIT = intervalle de la séance. La catégorie de l'exercice
+   * lui-même n'entre pas en jeu : une séance mêle librement muscu, HIIT et étirements.
+   */
+  const itemDefaults = (cat: Category, m: Measure | undefined): Partial<SessionItem> => {
+    if (cat === 'muscu') return { sets: 3, target: m === 'sec' ? 30 : 10, restSec: 60 }
+    if (cat === 'etirements') return m === 'reps' ? { target: 10 } : { durationSec: 30 }
+    return {}
+  }
+
+  // Changer le déroulé garde les exercices, seuls leurs réglages repartent des défauts
   const switchCategory = (c: Category) => {
     if (c === category) return
-    if (items.length && !window.confirm('Changer de catégorie videra la liste des exercices de la séance. Continuer ?')) return
+    if (items.length && !window.confirm('Changer de catégorie remet les réglages des exercices par défaut. Continuer ?')) return
     setCategory(c)
-    setItems([])
+    setItems((p) => p.map((it) => ({ exerciseId: it.exerciseId, uid: it.uid, comment: it.comment, ...itemDefaults(c, exOf(it.exerciseId)?.measure) })))
   }
 
   const toggleDay = (d: number) =>
     setDays((p) => (p.includes(d) ? p.filter((x) => x !== d) : [...p, d].sort((a, b) => a - b)))
 
   /**
-   * Ajoute un exercice existant à la séance avec les réglages par défaut de la
-   * catégorie. `measure` évite de dépendre de `exercises` pour un exercice qui
-   * vient d'être créé (l'abonnement du store peut ne pas l'avoir encore livré).
+   * Ajoute un exercice existant à la séance avec les réglages par défaut du déroulé.
+   * `measure` évite de dépendre de `exercises` pour un exercice qui vient d'être créé
+   * (l'abonnement du store peut ne pas l'avoir encore livré).
    */
   const appendItem = (exId: string, measure?: Measure) => {
     const m = measure ?? exOf(exId)?.measure
-    const base: DraftItem = { exerciseId: exId, uid: newUid() }
-    if (category === 'muscu') {
-      base.sets = 3
-      base.target = m === 'sec' ? 30 : 10
-      base.restSec = 60
-    }
-    if (category === 'etirements') {
-      // Posture tenue (sec) ou mouvement compté (reps), selon la mesure de l'exercice
-      if (m === 'reps') base.target = 10
-      else base.durationSec = 30
-    }
-    setItems((p) => [...p, base])
+    setItems((p) => [...p, { exerciseId: exId, uid: newUid(), ...itemDefaults(category, m) }])
   }
 
-  /** Crée un exercice à la volée (mini-ligne du sélecteur) et l'ajoute à la séance */
-  const quickCreate = async ({ name: nm, subtype, measure }: { name: string; subtype: string; measure: Measure }) => {
+  /** Crée un exercice à la volée (mini-ligne du sélecteur, dans la catégorie filtrée) et l'ajoute */
+  const quickCreate = async ({ name: nm, subtype, measure, category: cat }: { name: string; subtype: string; measure: Measure; category: Category }) => {
     if (!nm) return
     const exId = await addExercise({
       name: nm,
-      category,
+      category: cat,
       subtypes: subtype ? [subtype] : [],
       subtype: '',
       measure,
@@ -1598,7 +1599,7 @@ export default function SessionForm() {
           <div className={'sticky top-5 flex max-h-[calc(100dvh-8rem)] flex-col p-4 ' + glassCard}>
             <Eyebrow className="mb-2.5 text-ink/50">— Banque d'exercices</Eyebrow>
             <ExercisePicker
-              exercises={catExercises}
+              exercises={exercises}
               category={category}
               counts={itemCounts}
               onAdd={appendItem}
@@ -1617,7 +1618,7 @@ export default function SessionForm() {
         {/* Hauteur bornée : la recherche reste en tête, seule la liste défile */}
         <div className="flex max-h-[62dvh] min-h-[45dvh] flex-col">
           <ExercisePicker
-            exercises={catExercises}
+            exercises={exercises}
             category={category}
             counts={itemCounts}
             onAdd={appendItem}

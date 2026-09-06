@@ -139,7 +139,8 @@ try {
   await desk.waitForSelector("aside >> text=Banque d'exercices")
   // Compter les poignées : une par carte d'exercice, toujours dans le DOM
   const nBefore = await desk.locator('[aria-label^="Réordonner"]').count()
-  await desk.locator('aside').getByRole('button').first().click()
+  // Le premier bouton du volet est désormais le filtre « Tous » : viser un exercice de la liste
+  await desk.locator('aside section button').first().click()
   const nAfter = await desk.locator('[aria-label^="Réordonner"]').count()
   if (nAfter !== nBefore + 1)
     throw new Error(`Le clic dans le volet devrait ajouter un exercice (${nBefore} → ${nAfter})`)
